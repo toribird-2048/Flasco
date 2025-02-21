@@ -11,7 +11,7 @@ rng = np.random.default_rng()
 class Object:
     def __init__(self, energy:np.float32, colors:np.array(np.float32), position:np.array(np.float32), radius:np.int16):
         self.energy = np.float32(energy)
-        self.colors = np.array(colors)
+        self.colors = np.array(colors) #(R, G, B)それぞれ0~1
         self.position = np.array(position)
         self.radius = np.int16(radius)
         self.pre_movement = np.array([0.0, 0.0])
@@ -49,7 +49,7 @@ class Object:
         :return:
         """
         self.position += vector
-
+    
     def no_energy_check(self):
         """
         エネルギーが0になったらremove_flagをTrueにする
@@ -87,8 +87,8 @@ class Object:
         :param AP:
         :return:
         """
-        velocity_vector = AP.get_info(2)
-        self.move(velocity_vector)
+        velocity_vector = AP.get_info("velocity_vector")
+        self.pre_movement += velocity_vector
         AP.true_remove_flag()
 
 
@@ -100,9 +100,8 @@ class Food(Object):
         return "Food"
 
 class Cell(Object):
-    def __init__(self, energy:np.float32, colors:np.array(np.float32), position:np.array(np.float32), radius:np.int16, neural_network:np.array(np.float32), valid_rays_count, timers_max_cycles:np.array(np.int16)):
+    def __init__(self, energy:np.float32, colors:np.array(np.float32), position:np.array(np.float32), radius:np.int16, valid_rays_count, timers_max_cycles:np.array(np.int16)):
         super().__init__(energy, colors, position, radius)
-        self.neural_network = np.array(neural_network)
         self.rays = [None for _ in range(8)]
         self.valid_rays_count = valid_rays_count
         self.pre_position = np.array([0.0, 0.0])
@@ -110,9 +109,26 @@ class Cell(Object):
         self.timers_cycle = [0, 0, 0, 0, 0]
         self.energy_absorption_rate = np.float32(0.01)
         self.tickly_energy_consumption = np.float32(0.05)
+        self.weight_input_to_hidden = np.zeros((30,48))
+        self.bias_input_to_hidden = np.zeros((30,1))
+        self.weight_hidden_to_output = np.zeros((21,30))
+        self.bias_hidden_to_output = np.zeros((21,1))
+        self.neural_network_output = np.zeros((21,1))
 
     def __str__(self):
         return "Cell"
+
+    def set_neural_network(self, weight_input_to_hidden, bias_input_to_hidden, weight_hidden_to_output, bias_hidden_to_output):
+        self.weight_input_to_hidden = weight_input_to_hidden
+        self.bias_input_to_hidden = bias_input_to_hidden
+        self.weight_hidden_to_output = weight_hidden_to_output
+        self.bias_hidden_to_output = bias_hidden_to_output
+
+    def set_neural_network_random(self):
+        self.weight_input_to_hidden = 0.5 * rng.random(self.weight_input_to_hidden.shape) - 0.25
+        self.bias_input_to_hidden = 0.2 * rng.random(self.bias_input_to_hidden.shape) - 0.1
+        self.weight_hidden_to_output = 0.5 * rng.random(self.weight_hidden_to_output.shape) - 0.25
+        self.bias_hidden_to_output = 0.2 * rng.random(self.bias_hidden_to_output.shape) - 0.1
 
     def premove(self, vector:np.array(np.float32)):
         self.pre_movement = vector
@@ -132,14 +148,24 @@ class Cell(Object):
         ニューラルネットワークへ渡す情報を集める
         :return:
         """
-        rays_info = [0 for _ in range(len(self.rays))]
+        rays_info = np.zeros((8,5), dtype=np.float32)
         for k, ray in enumerate(self.rays[:self.valid_rays_count]):
             if ray is not None:
-                rays_info[k] = ray.get_info()
+                rays_info[k] = ray.get_ray_info()
+        rays_info = np.ravel(rays_info)
         self_energy = self.energy
-        self_delta_position = self.delta_position
-        for timer_cycle in self.timers_cycle:
-            pass
+        self_delta_position = self.delta_position()
+        timers_info = self.timers_cycle
+        info_for_NN = np.concatenate((rays_info, np.array([self_energy, *self_delta_position]), timers_info), axis=0)
+        info_for_NN = info_for_NN.reshape((info_for_NN.size, 1))
+        return info_for_NN
+
+
+    def calc_neural_network(self, NN_input):
+        input_layer:np.array(np.float32) = np.array(NN_input).reshape((48,1))
+        hidden_layer:np.array(np.float32) = np.tanh(self.weight_input_to_hidden @ input_layer + self.bias_input_to_hidden)
+        output_layer:np.array(np.float32) = np.tanh(self.weight_hidden_to_output @ hidden_layer + self.bias_hidden_to_output)
+        self.neural_network_output = output_layer.reshape(output_layer.size)
 
     def delta_position(self):
         """
@@ -175,8 +201,7 @@ class Cell(Object):
 
 
 class Particle:
-    def __init__(self, energy:np.float32, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16):
-        self.energy = energy
+    def __init__(self, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16):
         self.position = position
         self.velocity_vector = velocity_vector
         self.lifetime = lifetime
@@ -190,9 +215,7 @@ class Particle:
         """
         :return: energy, position, velocity_vector, lifetime, age, self.remove_flag
         """
-        if info_type == "energy":
-            return self.energy
-        elif info_type == "position":
+        if info_type == "position":
             return self.position
         elif info_type == "velocity_vector":
             return self.velocity_vector
@@ -224,29 +247,27 @@ class Particle:
             self.remove_flag = True
 
 class Ray(Particle):
-    def __init__(self, energy:np.float32, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16):
-        super().__init__(energy, position, velocity_vector, lifetime)
-        self.object_info = [0] * 5
-        self.object_types = {"Cell":-1, "Food":0, "Unmovable":1}
+    def __init__(self, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16):
+        super().__init__(position, velocity_vector, lifetime)
+        self.object_info_and_theta = np.zeros(5)
+        self.object_types = {"Cell":np.float32(-1.0), "Food":np.float32(0.0), "Unmovable":np.float32(1.0)}
 
-    def get_type(self):
-        #タイプ(識別子)は整数でなく、-1~1を分割したその点であらわす。1, 2, 3, 4, 5 -> -1, -0.5, 0, 0.5, 1
-        #色も[-1,1]の範囲で渡す
-        pass
+    def get_ray_info(self):
+        return self.object_info_and_theta
 
     def set_theta(self, theta:np.float32):
-        self.object_info[0] = theta / np.pi #正規化
+        self.object_info_and_theta[0] = theta / np.pi #正規化
 
     def set_object_info(self, objectA):
         object_colors = objectA.get_info("colors")
         object_type_str = str(objectA)
         object_type = self.object_types[object_type_str]
-        self.object_info[1:] = *object_colors, object_type
+        self.object_info_and_theta[1:] = *object_colors, object_type
         self.true_remove_flag()
 
 class AttractantParticle(Particle):
-    def __init__(self, energy:np.float32, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16):
-        super().__init__(energy, position, velocity_vector, lifetime)
+    def __init__(self, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16):
+        super().__init__(position, velocity_vector, lifetime)
 
 
 def touch_judgement(particle:Particle, objectA:Object):
@@ -277,94 +298,105 @@ class Game:
         self.world_size = np.array((600, 600))#原点は左下
         self.clock = pygame.time.Clock()
         self.running = True
-        self.food_set:list[Food] = []
-        self.cell_set:list[Cell] = []
-        self.AP_set:list[AttractantParticle] = []
-        self.ray_set:list[Ray] = []
+        self.food_list:list[Food] = []
+        self.cell_list:list[Cell] = []
+        self.AP_list:list[AttractantParticle] = []
+        self.ray_list:list[Ray] = []
         self.energy_pool = np.float32(0.0)
         self.energy_per_food = np.float32(1.0)
 
     def append_cells(self,cells:list[Cell]):
         for cell in cells:
-            self.cell_set.append(cell)
+            self.cell_list.append(cell)
 
     def append_foods(self,foods:list[Food]):
         for food in foods:
-            self.food_set.append(food)
+            self.food_list.append(food)
+
+    def debug_append_APs(self,APs:list[AttractantParticle]):
+        for ap in APs:
+            self.AP_list.append(ap)
+
+    def debug_append_rays(self,rays:list[Ray]):
+        for ray in rays:
+            self.ray_list.append(ray)
 
     def set_energy_pool(self, energy):
         self.energy_pool = energy
+
+    def debug_randomize_cell_neural_network(self):
+        for cell in self.cell_list:
+            cell.set_neural_network_random()
 
     def generate_food(self): ###1
         food_count = int(np.floor(self.energy_pool / self.energy_per_food))
         for _ in range(food_count):
             food_position = rng.random(2) * self.world_size
-            self.food_set.append(Food(self.energy_per_food, np.array([0.0, 1.0, 0.0]), food_position, np.int16(2)))
+            self.food_list.append(Food(self.energy_per_food, np.array([0.0, 1.0, 0.0]), food_position, np.int16(2)))
             self.energy_pool -= self.energy_per_food
 
     def rays_and_APs_touch_judgement(self): ###2
-        for cell in self.cell_set:
-            for ap in self.AP_set:
-                if touch_judgement(ap, cell):
-                    cell.AP_receptor(ap)
-        for food in self.food_set:
-            for ap in self.AP_set:
-                if touch_judgement(ap, food):
-                    food.AP_receptor(ap)
-        for ray in self.ray_set:
-            for cell in self.cell_set:
+        for ap in self.AP_list:
+            for cell in self.cell_list:
+                    if touch_judgement(ap, cell):
+                        cell.AP_receptor(ap)
+            for food in self.food_list:
+                    if touch_judgement(ap, food):
+                        food.AP_receptor(ap)
+        for ray in self.ray_list:
+            for cell in self.cell_list:
                 if touch_judgement(ray, cell):
                     ray.set_object_info(cell)
-            for food in self.food_set:
+            for food in self.food_list:
                 if touch_judgement(ray, food):
                     ray.set_object_info(food)
 
     def calc_repulsion(self): ###3 repulsion:斥力
-        for cell in self.cell_set:
-            for sub_cell in self.cell_set:
+        for cell in self.cell_list:
+            for sub_cell in self.cell_list:
                 if sub_cell is not cell:
                     repulsion = calc_repulsion_between_cells(cell, sub_cell)
                     cell.premove(repulsion)
 
     def energy_absorbing(self): ###4
-        for cell in self.cell_set:
-            for sub_cell in self.cell_set:
+        for cell in self.cell_list:
+            for sub_cell in self.cell_list:
                 cell.absorb_energy(sub_cell)
-            for food in self.food_set:
+            for food in self.food_list:
                 cell.absorb_energy(food)
 
     def consume_cell_energy(self): ###5
-        for cell in self.cell_set:
+        for cell in self.cell_list:
             cell.tickly_consume_energy()
 
     def update_cell_timers(self): ###6
-        for cell in self.cell_set:
+        for cell in self.cell_list:
             cell.update_timers()
 
-game = Game()
-cell1 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((0,0)), np.int16(5), [], 1, np.array([10, 2, 3, 4, 5]))
-cell2 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1,0)), np.int16(5), [], 1, np.array([10, 2, 3, 4, 5]))
-food1 = Food(np.float32(1.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1,1)), np.int16(3))
+    def execute_neural_network(self): ###7
+        for cell in self.cell_list:
+            collected_info = cell.info_collector_for_NN()
+            cell.calc_neural_network(collected_info)
 
-game.append_cells([cell1, cell2])
+game = Game()
+cell1 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((0.0,0.0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]))
+#cell2 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1,0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]))
+food1 = Food(np.float32(1.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1.0,1.0)), np.int16(3))
+
+ap1 = AttractantParticle(np.array((0.5,0.5)), np.array((0.1,0.1)), np.int16(10))
+
+game.append_cells([cell1])
 game.append_foods([food1])
+game.debug_append_APs([ap1])
 game.set_energy_pool(10)
 
 game.generate_food()
-game.rays_and_APs_touch_judgement()  #これだけ大丈夫かわからん
+game.rays_and_APs_touch_judgement()  #動いてないっぽい
 game.calc_repulsion()
 game.energy_absorbing()
 game.consume_cell_energy()
 game.update_cell_timers()
+game.debug_randomize_cell_neural_network()
+game.execute_neural_network()
 
-
-
-
-
-
-
-
-
-
-
-
+print(cell1.neural_network_output)
