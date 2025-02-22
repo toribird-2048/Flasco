@@ -21,6 +21,9 @@ class Object:
     def __str__(self):
         return "Object"
 
+    def get_remove_flag(self):
+        return self.remove_flag
+
     def get_info(self, info_type:str):
         """
         :return: energy, colors, position, radius, pre_movement, remove_flag
@@ -58,6 +61,7 @@ class Object:
         """
         if self.energy <= 0:
             self.true_remove_flag()
+        assert (self.energy <= 0 and self.remove_flag is True) or (self.energy > 0 and self.remove_flag is False)
 
     def edit_energy(self, value:np.float32):
         """
@@ -115,6 +119,7 @@ class Cell(Object):
         self.weight_hidden_to_output = np.zeros((21,30))
         self.bias_hidden_to_output = np.zeros((21,1))
         self.neural_network_outputs = np.zeros((21, 1))
+        self.delta_position = np.array([0.0, 0.0])
         self.game = game
 
     def __str__(self):
@@ -173,7 +178,7 @@ class Cell(Object):
         前フレームからの移動量
         :return:
         """
-        return self.position - self.pre_position
+        return self.delta_position
 
     def shoot_rays(self):
         neural_network_outputs_ray = self.neural_network_outputs[:16]
@@ -195,7 +200,6 @@ class Cell(Object):
         neural_network_outputs_duplicate = self.neural_network_outputs[18:21]
         duplicate_flag = neural_network_outputs_duplicate[0]
         duplicate_energy_ratio = neural_network_outputs_duplicate[1:3]
-        print(duplicate_energy_ratio)
         duplicate_energy_ratio = duplicate_energy_ratio / np.sum(duplicate_energy_ratio + 1 + 1e-10)
         if duplicate_flag > 0:
             cell1_energy = self.energy * duplicate_energy_ratio[0]
@@ -220,6 +224,9 @@ class Particle:
 
     energy_consumption = np.float32(1.0)
     particle_speed = np.float32(10.0)
+
+    def get_remove_flag(self):
+        return self.remove_flag
 
     def get_info(self, info_type:str):
         """
@@ -406,32 +413,39 @@ class Game:
                 cell_list.append(cell2)
         self.cell_list = cell_list
 
+    def remove_flag_check(self): ###11
+        for cell in self.cell_list:
+            cell.no_energy_check()
+        for food in self.food_list:
+            food.no_energy_check()
 
 
 
-game = Game()
-cell1 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((0.0,0.0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]), game)
-#cell2 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1,0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]), game)
-food1 = Food(np.float32(1.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1.0,1.0)), np.int16(3))
 
-ap1 = AttractantParticle(np.array((0.5,0.5)), np.array((0.1,0.1)), np.int16(10))
+for k in range(100000):
+    game = Game()
+    cell1 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((0.0,0.0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]), game)
+    #cell2 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1,0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]), game)
+    food1 = Food(np.float32(1.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1.0,1.0)), np.int16(3))
 
-game.append_cells([cell1])
-game.append_foods([food1])
-game.debug_append_APs([ap1])
-game.set_energy_pool(10)
+    ap1 = AttractantParticle(np.array((0.5,0.5)), np.array((0.1,0.1)), np.int16(10))
 
-game.generate_food()
-game.rays_and_APs_touch_judgement()
-game.calc_repulsion()
-game.energy_absorbing()
-game.consume_cell_energy()
-game.update_cell_timers()
-game.debug_randomize_cell_neural_network()
-game.execute_neural_network()
-game.shoot_rays()
-game.shoot_APs()
-game.cells_duplicate()
+    game.append_cells([cell1])
+    game.append_foods([food1])
+    game.debug_append_APs([ap1])
+    game.set_energy_pool(10)
 
-print(cell1.neural_network_outputs)
+    game.generate_food()
+    game.rays_and_APs_touch_judgement()
+    game.calc_repulsion()
+    game.energy_absorbing()
+    game.consume_cell_energy()
+    game.update_cell_timers()
+    game.debug_randomize_cell_neural_network()
+    game.execute_neural_network()
+    game.shoot_rays()
+    game.shoot_APs()
+    game.cells_duplicate()
+    game.remove_flag_check()
+    print(k)
 #print(game.ray_list)
