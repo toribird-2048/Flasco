@@ -1,6 +1,7 @@
 import numpy as np
 import pygame
 from typing import Self
+import copy
 
 
 #誘因粒子：AttractantParticle:AP
@@ -100,7 +101,7 @@ class Food(Object):
         return "Food"
 
 class Cell(Object):
-    def __init__(self, energy:np.float32, colors:np.array(np.float32), position:np.array(np.float32), radius:np.int16, valid_rays_count, timers_max_cycles:np.array(np.int16)):
+    def __init__(self, energy:np.float32, colors:np.array(np.float32), position:np.array(np.float32), radius:np.int16, valid_rays_count, timers_max_cycles:np.array(np.int16), game:"Game"):
         super().__init__(energy, colors, position, radius)
         self.rays = [None for _ in range(8)]
         self.valid_rays_count = valid_rays_count
@@ -113,7 +114,8 @@ class Cell(Object):
         self.bias_input_to_hidden = np.zeros((30,1))
         self.weight_hidden_to_output = np.zeros((21,30))
         self.bias_hidden_to_output = np.zeros((21,1))
-        self.neural_network_output = np.zeros((21,1))
+        self.neural_network_outputs = np.zeros((21, 1))
+        self.game = game
 
     def __str__(self):
         return "Cell"
@@ -158,14 +160,13 @@ class Cell(Object):
         timers_info = self.timers_cycle
         info_for_NN = np.concatenate((rays_info, np.array([self_energy, *self_delta_position]), timers_info), axis=0)
         info_for_NN = info_for_NN.reshape((info_for_NN.size, 1))
-        return info_for_NN
-
+        return info_for_NN[:]
 
     def calc_neural_network(self, NN_input):
         input_layer:np.array(np.float32) = np.array(NN_input).reshape((48,1))
         hidden_layer:np.array(np.float32) = np.tanh(self.weight_input_to_hidden @ input_layer + self.bias_input_to_hidden)
         output_layer:np.array(np.float32) = np.tanh(self.weight_hidden_to_output @ hidden_layer + self.bias_hidden_to_output)
-        self.neural_network_output = output_layer.reshape(output_layer.size)
+        self.neural_network_outputs = output_layer.reshape(output_layer.size)
 
     def delta_position(self):
         """
@@ -174,30 +175,39 @@ class Cell(Object):
         """
         return self.position - self.pre_position
 
-    def AP_injector(self, theta:np.float32):
-        """
-        誘因粒子を角度{theta}で射出する
-        :param theta:
-        :return:
-        """
-        pass
+    def shoot_rays(self):
+        neural_network_outputs_ray = self.neural_network_outputs[:16]
+        ray_shoot_flags = [neural_network_outputs_ray[k*2] for k in range(8)]
+        ray_shoot_theta = [neural_network_outputs_ray[k*2+1] * np.pi for k in range(8)]
+        for k, ray in enumerate(self.rays):
+            if ray is None:
+                if ray_shoot_flags[k] > 0:
+                    self.rays[k] = Ray(self.position, np.array([np.cos(ray_shoot_theta[k]), np.sin(ray_shoot_theta[k])]), np.int16(20))
+        return self.rays
 
-    def ray_injector(self, theta:np.float32, injector_number:np.int8):
-        """
-        レイを角度{theta}で{injector_number}の射出機から発射
-        :param theta:
-        :param injector_number:
-        :return:
-        """
-        pass
+    def shoot_AP(self):
+        neural_network_outputs_AP = self.neural_network_outputs[16:18]
+        AP_shoot_flag = neural_network_outputs_AP[0]
+        AP_shoot_theta = neural_network_outputs_AP[1] * np.pi
+        return AttractantParticle(self.position, np.array((np.cos(AP_shoot_theta), np.sin(AP_shoot_theta))), np.int16(20))
 
-    def ray_info_receptor(self, ray:"Ray"):
-        """
-        レイが当たった際、情報を受け取る
-        :param ray:
-        :return:
-        """
-        pass
+    def duplicate(self):
+        neural_network_outputs_duplicate = self.neural_network_outputs[18:21]
+        duplicate_flag = neural_network_outputs_duplicate[0]
+        duplicate_energy_ratio = neural_network_outputs_duplicate[1:3]
+        print(duplicate_energy_ratio)
+        duplicate_energy_ratio = duplicate_energy_ratio / np.sum(duplicate_energy_ratio + 1 + 1e-10)
+        if duplicate_flag > 0:
+            cell1_energy = self.energy * duplicate_energy_ratio[0]
+            cell2_energy = self.energy * duplicate_energy_ratio[1]
+            random_position = self.position + 0.5 * rng.random((2,1))
+            random_position = np.mod(random_position, self.game.world_size)
+            cell2 = Cell(cell2_energy, self.colors, self.position, self.radius, self.valid_rays_count, self.timers_max_cycles,self.game)
+            cell2.set_neural_network(self.weight_input_to_hidden, self.bias_input_to_hidden, self.weight_hidden_to_output, self.bias_hidden_to_output)
+            return cell2
+        else:
+            return None
+
 
 
 class Particle:
@@ -378,9 +388,30 @@ class Game:
             collected_info = cell.info_collector_for_NN()
             cell.calc_neural_network(collected_info)
 
+    def shoot_rays(self): ###8
+        for cell in self.cell_list:
+            rays = cell.shoot_rays()
+            self.ray_list += [ray for ray in rays if ray is not None]
+
+    def shoot_APs(self): ###9
+        for cell in self.cell_list:
+            AP = cell.shoot_AP()
+            self.AP_list.append(AP)
+
+    def cells_duplicate(self): ###10
+        cell_list = self.cell_list[:]
+        for cell in self.cell_list:
+            cell2 = cell.duplicate()
+            if cell2 is not None:
+                cell_list.append(cell2)
+        self.cell_list = cell_list
+
+
+
+
 game = Game()
-cell1 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((0.0,0.0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]))
-#cell2 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1,0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]))
+cell1 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((0.0,0.0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]), game)
+#cell2 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1,0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]), game)
 food1 = Food(np.float32(1.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1.0,1.0)), np.int16(3))
 
 ap1 = AttractantParticle(np.array((0.5,0.5)), np.array((0.1,0.1)), np.int16(10))
@@ -391,12 +422,16 @@ game.debug_append_APs([ap1])
 game.set_energy_pool(10)
 
 game.generate_food()
-game.rays_and_APs_touch_judgement()  #動いてないっぽい
+game.rays_and_APs_touch_judgement()
 game.calc_repulsion()
 game.energy_absorbing()
 game.consume_cell_energy()
 game.update_cell_timers()
 game.debug_randomize_cell_neural_network()
 game.execute_neural_network()
+game.shoot_rays()
+game.shoot_APs()
+game.cells_duplicate()
 
-print(cell1.neural_network_output)
+print(cell1.neural_network_outputs)
+#print(game.ray_list)
