@@ -57,7 +57,7 @@ class Object:
     def premove_to_move(self):
         self.move(self.pre_movement)
         self.pre_movement = np.zeros(2,dtype=np.float32)
-    
+
     def no_energy_check(self):
         """
         エネルギーが0になったらremove_flagをTrueにする
@@ -65,7 +65,6 @@ class Object:
         """
         if self.energy <= 0:
             self.true_remove_flag()
-        assert (self.energy <= 0 and self.remove_flag is True) or (self.energy > 0 and self.remove_flag is False)
 
     def edit_energy(self, value:np.float32):
         """
@@ -169,7 +168,7 @@ class Cell(Object):
                 rays_info[k] = ray.get_ray_info()
         rays_info = np.ravel(rays_info)
         self_energy = self.energy
-        self_delta_position = self.delta_position()
+        self_delta_position = self.delta_position[:]
         timers_info = self.timers_cycle
         info_for_NN = np.concatenate((rays_info, np.array([self_energy, *self_delta_position]), timers_info), axis=0)
         info_for_NN = info_for_NN.reshape((info_for_NN.size, 1))
