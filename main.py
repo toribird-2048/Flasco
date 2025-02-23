@@ -253,6 +253,7 @@ class Particle:
         決まった方向(velocity_vector)に動く
         :return:
         """
+        motono_iti = self.position
         self.position += self.velocity_vector
 
     def lifetime_check(self):
@@ -419,11 +420,17 @@ class Game:
         for food in self.food_list:
             food.no_energy_check()
 
-    def premove_to_move(self):
+    def premove_to_move(self): ###12
         for cell in self.cell_list:
             cell.premove_to_move()
         for food in self.cell_list:
             food.premove_to_move()
+
+    def move_particles(self): ###13
+        for ap in self.AP_list:
+            ap.move()
+        for ray in self.ray_list:
+            ray.move()
 
 
 
