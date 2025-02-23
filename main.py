@@ -53,6 +53,10 @@ class Object:
         :return:
         """
         self.position += vector
+
+    def premove_to_move(self):
+        self.move(self.pre_movement)
+        self.pre_movement = np.zeros(2,dtype=np.float32)
     
     def no_energy_check(self):
         """
@@ -109,16 +113,15 @@ class Cell(Object):
         super().__init__(energy, colors, position, radius)
         self.rays = [None for _ in range(8)]
         self.valid_rays_count = valid_rays_count
-        self.pre_position = np.array([0.0, 0.0])
         self.timers_max_cycles = np.array(timers_max_cycles)
         self.timers_cycle = [0, 0, 0, 0, 0]
         self.energy_absorption_rate = np.float32(0.01)
         self.tickly_energy_consumption = np.float32(0.05)
-        self.weight_input_to_hidden = np.zeros((30,48))
-        self.bias_input_to_hidden = np.zeros((30,1))
-        self.weight_hidden_to_output = np.zeros((21,30))
-        self.bias_hidden_to_output = np.zeros((21,1))
-        self.neural_network_outputs = np.zeros((21, 1))
+        self.weight_input_to_hidden = np.zeros((30,48),dtype=np.float32)
+        self.bias_input_to_hidden = np.zeros((30,1),dtype=np.float32)
+        self.weight_hidden_to_output = np.zeros((21,30),dtype=np.float32)
+        self.bias_hidden_to_output = np.zeros((21,1),dtype=np.float32)
+        self.neural_network_outputs = np.zeros((21, 1),dtype=np.float32)
         self.delta_position = np.array([0.0, 0.0])
         self.game = game
 
@@ -137,8 +140,13 @@ class Cell(Object):
         self.weight_hidden_to_output = 0.5 * rng.random(self.weight_hidden_to_output.shape) - 0.25
         self.bias_hidden_to_output = 0.2 * rng.random(self.bias_hidden_to_output.shape) - 0.1
 
-    def premove(self, vector:np.array(np.float32)):
+    def premove(self, vector:np.array(np.float32)): #外部からの処理のためのもの
         self.pre_movement = vector
+
+    def premove_to_move(self):
+        self.move(self.pre_movement)
+        self.delta_position = self.pre_movement
+        self.pre_movement = np.zeros(2,dtype=np.float32)
 
     def absorb_energy(self, objectA):
         self.transfer_energy(objectA, -self.energy_absorption_rate)
@@ -172,13 +180,6 @@ class Cell(Object):
         hidden_layer:np.array(np.float32) = np.tanh(self.weight_input_to_hidden @ input_layer + self.bias_input_to_hidden)
         output_layer:np.array(np.float32) = np.tanh(self.weight_hidden_to_output @ hidden_layer + self.bias_hidden_to_output)
         self.neural_network_outputs = output_layer.reshape(output_layer.size)
-
-    def delta_position(self):
-        """
-        前フレームからの移動量
-        :return:
-        """
-        return self.delta_position
 
     def shoot_rays(self):
         neural_network_outputs_ray = self.neural_network_outputs[:16]
@@ -266,7 +267,7 @@ class Particle:
 class Ray(Particle):
     def __init__(self, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16):
         super().__init__(position, velocity_vector, lifetime)
-        self.object_info_and_theta = np.zeros(5)
+        self.object_info_and_theta = np.zeros(5,dtype=np.float32)
         self.object_types = {"Cell":np.float32(-1.0), "Food":np.float32(0.0), "Unmovable":np.float32(1.0)}
 
     def get_ray_info(self):
@@ -419,6 +420,11 @@ class Game:
         for food in self.food_list:
             food.no_energy_check()
 
+    def premove_to_move(self):
+        for cell in self.cell_list:
+            cell.premove_to_move()
+        for food in self.cell_list:
+            food.premove_to_move()
 
 
 
