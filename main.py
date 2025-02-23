@@ -466,6 +466,9 @@ class Game:
             if AP.get_remove_flag():
                 self.AP_list.remove(AP)
 
+    def add_energy_to_energy_pool(self): ###16
+        self.energy_pool += 3.0
+
 
 
 
