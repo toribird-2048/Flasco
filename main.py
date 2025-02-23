@@ -116,7 +116,7 @@ class Cell(Object):
         self.timers_cycle = [0, 0, 0, 0, 0]
         self.energy_absorption_rate = np.float32(0.01)
         self.tickly_energy_consumption = np.float32(0.05)
-        self.weight_input_to_hidden = np.zeros((30,48),dtype=np.float32)
+        self.weight_input_to_hidden = np.zeros((30,96),dtype=np.float32)
         self.bias_input_to_hidden = np.zeros((30,1),dtype=np.float32)
         self.weight_hidden_to_output = np.zeros((21,30),dtype=np.float32)
         self.bias_hidden_to_output = np.zeros((21,1),dtype=np.float32)
@@ -162,7 +162,7 @@ class Cell(Object):
         ニューラルネットワークへ渡す情報を集める
         :return:
         """
-        rays_info = np.zeros((8,5), dtype=np.float32)
+        rays_info = np.zeros((8,11), dtype=np.float32)
         for k, ray in enumerate(self.rays[:self.valid_rays_count]):
             if ray is not None:
                 rays_info[k] = ray.get_ray_info()
@@ -172,10 +172,11 @@ class Cell(Object):
         timers_info = self.timers_cycle
         info_for_NN = np.concatenate((rays_info, np.array([self_energy, *self_delta_position]), timers_info), axis=0)
         info_for_NN = info_for_NN.reshape((info_for_NN.size, 1))
+        assert info_for_NN.size == 96
         return info_for_NN[:]
 
     def calc_neural_network(self, NN_input):
-        input_layer:np.array(np.float32) = np.array(NN_input).reshape((48,1))
+        input_layer:np.array(np.float32) = np.array(NN_input).reshape((96,1))
         hidden_layer:np.array(np.float32) = np.tanh(self.weight_input_to_hidden @ input_layer + self.bias_input_to_hidden)
         output_layer:np.array(np.float32) = np.tanh(self.weight_hidden_to_output @ hidden_layer + self.bias_hidden_to_output)
         self.neural_network_outputs = output_layer.reshape(output_layer.size)
@@ -253,7 +254,6 @@ class Particle:
         決まった方向(velocity_vector)に動く
         :return:
         """
-        motono_iti = self.position
         self.position += self.velocity_vector
 
     def lifetime_check(self):
@@ -267,7 +267,7 @@ class Particle:
 class Ray(Particle):
     def __init__(self, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16):
         super().__init__(position, velocity_vector, lifetime)
-        self.object_info_and_theta = np.zeros(5,dtype=np.float32)
+        self.object_info_and_theta = np.zeros(11, dtype=np.float32)
         self.object_types = {"Cell":np.float32(-1.0), "Food":np.float32(0.0), "Unmovable":np.float32(1.0)}
 
     def get_ray_info(self):
@@ -278,6 +278,7 @@ class Ray(Particle):
 
     def set_object_info(self, objectA):
         object_colors = objectA.get_info("colors")
+        object_colors = object_colors.reshape(1,9)
         object_type_str = str(objectA)
         object_type = self.object_types[object_type_str]
         self.object_info_and_theta[1:] = *object_colors, object_type
@@ -307,7 +308,6 @@ def calc_repulsion_between_cells(main_cell:Cell, sub_cell:Cell): #MainCellが動
         return repulsion
     else:
         return np.array((0.0, 0.0))
-
 
 
 class Game:
@@ -434,7 +434,7 @@ class Game:
 
 
 
-for k in range(100000):
+for k in range(20000):
     game = Game()
     cell1 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((0.0,0.0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]), game)
     #cell2 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1,0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]), game)
