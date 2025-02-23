@@ -2,12 +2,22 @@ import numpy as np
 import pygame
 from typing import Self
 import sys
+import time
 
 
 #誘因粒子：AttractantParticle:AP
 
 rng = np.random.default_rng()
 
+FOOD_RADIUS = np.int16(5)
+CELL_RADIUS = np.int16(10)
+FOOD_ENERGY = np.float32(1)
+SHOOTING_RAY_RATE = np.float32(0.5)
+SHOOTING_AP_RATE = np.float32(0.5)
+RAY_LIFETIME = np.int16(300)
+RAY_SPEED = np.float32(1)
+CELL_DUPLICATE_RATE = np.float32(0.5)
+DUPLICATE_COOL_DOWN = np.int16(10000)
 
 class Object:
     def __init__(self, energy:np.float32, colors:np.array(np.float32), position:np.array(np.float32), radius:np.int16, game:"Game"):
@@ -30,7 +40,7 @@ class Object:
         :return: energy, colors, position, radius, pre_movement, remove_flag
         """
         if info_type == "energy":
-            return self.energy[:]
+            return self.energy
         elif info_type == "colors":
             return self.colors[:]
         elif info_type == "position":
@@ -69,7 +79,7 @@ class Object:
         if self.energy <= 0:
             self.true_remove_flag()
 
-    def edit_energy(self, value:np.float32):
+    def add_energy_and_return_added_energy(self, value:np.float32):
         """
         エネルギー値を変え、エネルギー変更量(符号そのまま)を返す
         :param value:
@@ -89,8 +99,8 @@ class Object:
         :param value:
         :return:
         """
-        transferring_energy = self.edit_energy(-value)
-        target.edit_energy(-transferring_energy)
+        transferring_energy = self.add_energy_and_return_added_energy(-value)
+        target.add_energy_and_return_added_energy(-transferring_energy)
 
     def AP_receptor(self, AP):
         """
@@ -117,14 +127,18 @@ class Cell(Object):
         self.valid_rays_count = valid_rays_count
         self.timers_max_cycles = np.array(timers_max_cycles)
         self.timers_cycle = [0, 0, 0, 0, 0]
-        self.energy_absorption_rate = np.float32(0.01)
-        self.tickly_energy_consumption = np.float32(0.05)
+        self.timer_duplicate = 0
+        self.energy_absorption_rate = np.float32(0.1)
+        self.tickly_energy_consumption = np.float32(1)
         self.weight_input_to_hidden = np.zeros((30,96),dtype=np.float32)
         self.bias_input_to_hidden = np.zeros((30,1),dtype=np.float32)
         self.weight_hidden_to_output = np.zeros((23,30),dtype=np.float32)
         self.bias_hidden_to_output = np.zeros((23,1),dtype=np.float32)
         self.neural_network_outputs = np.zeros((23, 1),dtype=np.float32)
         self.delta_position = np.array([0.0, 0.0])
+        self.age = 0
+
+    cell_max_age = 1000
 
     def __str__(self):
         return "Cell"
@@ -146,8 +160,15 @@ class Cell(Object):
 
     def premove_to_move(self):
         self.move(self.pre_movement)
-        self.delta_position = self.pre_movement
+        self.delta_position = self.pre_movement[:]
         self.pre_movement = np.zeros(2,dtype=np.float32)
+
+    def add_age(self):
+        self.age += 1
+
+    def check_age(self):
+        if self.age >= self.cell_max_age:
+            self.true_remove_flag()
 
     def remove_ray(self):
         rays = self.rays
@@ -160,15 +181,18 @@ class Cell(Object):
         return removed_rays
 
 
-    def absorb_energy(self, objectA):
-        self.transfer_energy(objectA, -self.energy_absorption_rate)
+    def absorb_energy_from_object(self, objectA):
+        if touch_judgement_between_objects(self, objectA):
+            self.transfer_energy(objectA, -self.energy_absorption_rate)
 
-    def tickly_consume_energy(self):
+    def cycly_consume_energy(self):
         self.energy -= self.tickly_energy_consumption
 
     def update_timers(self):
         for k, timer in enumerate(self.timers_cycle):
             self.timers_cycle[k] = np.mod(self.timers_cycle[k]+1, self.timers_max_cycles[k])
+        if self.timer_duplicate != 0:
+            self.timer_duplicate = np.mod(self.timer_duplicate + 1, DUPLICATE_COOL_DOWN) #+1は増殖時に。
 
     def info_collector_for_NN(self):
         """
@@ -189,8 +213,8 @@ class Cell(Object):
 
     def calc_neural_network(self, NN_input):
         input_layer:np.array(np.float32) = np.array(NN_input).reshape((96,1))
-        hidden_layer:np.array(np.float32) = np.tanh(self.weight_input_to_hidden @ input_layer + self.bias_input_to_hidden)
-        output_layer:np.array(np.float32) = np.tanh(self.weight_hidden_to_output @ hidden_layer + self.bias_hidden_to_output)
+        hidden_layer:np.array(np.float32) = np.tanh((self.weight_input_to_hidden @ input_layer + self.bias_input_to_hidden) * 0.2)
+        output_layer:np.array(np.float32) = np.tanh((self.weight_hidden_to_output @ hidden_layer + self.bias_hidden_to_output) * 0.2)
         self.neural_network_outputs = output_layer.reshape(output_layer.size)
 
     def shoot_rays(self):
@@ -199,37 +223,43 @@ class Cell(Object):
         ray_shoot_theta = [neural_network_outputs_ray[k*2+1] * np.pi for k in range(8)]
         for k, ray in enumerate(self.rays):
             if ray is None:
-                if ray_shoot_flags[k] > 0:
-                    self.rays[k] = Ray(self.position, np.array([np.cos(ray_shoot_theta[k]), np.sin(ray_shoot_theta[k])]), np.int16(20), self.game)
+                if ray_shoot_flags[k] > 1 - SHOOTING_RAY_RATE * 2:
+                    ray_vector = np.array([np.cos(ray_shoot_theta[k]), np.sin(ray_shoot_theta[k])])
+                    self.rays[k] = Ray(self.position + ray_vector * (self.radius + 1), np.array([np.cos(ray_shoot_theta[k]), np.sin(ray_shoot_theta[k])]) * RAY_SPEED, RAY_LIFETIME, self.game)
         return self.rays
 
     def shoot_AP(self):
         neural_network_outputs_AP = self.neural_network_outputs[16:18]
         AP_shoot_flag = neural_network_outputs_AP[0]
-        AP_shoot_theta = neural_network_outputs_AP[1] * np.pi
-        AP_vector = np.array([np.cos(AP_shoot_theta), np.sin(AP_shoot_theta)])
-        return AttractantParticle(self.position + AP_vector * (self.radius + 1), AP_vector, np.int16(20), self.game)
+        if AP_shoot_flag > 1 - SHOOTING_AP_RATE:
+            AP_shoot_theta = neural_network_outputs_AP[1] * np.pi
+            AP_vector = np.array([np.cos(AP_shoot_theta), np.sin(AP_shoot_theta)])
+            return AttractantParticle(self.position + AP_vector * (self.radius + 1), AP_vector, np.int16(5), self.game)
+        else:
+            return None
 
     def duplicate(self):
         neural_network_outputs_duplicate = self.neural_network_outputs[18:21]
         duplicate_flag = neural_network_outputs_duplicate[0]
         duplicate_energy_ratio = neural_network_outputs_duplicate[1:3]
-        duplicate_energy_ratio = duplicate_energy_ratio * 0.99 / np.sum(duplicate_energy_ratio + 1 + 1e-10)
-        if duplicate_flag > 0:
-            cell1_energy = self.energy * duplicate_energy_ratio[0]
-            cell2_energy = self.energy * duplicate_energy_ratio[1]
-            random_position = self.position + 0.5 * rng.random(2)
-            random_position = np.mod(random_position, self.game.world_size)
-            self.energy = cell1_energy
-            cell2 = Cell(cell2_energy, self.colors[:], random_position, self.radius, self.valid_rays_count, self.timers_max_cycles, self.game)
-            cell2.set_neural_network(self.weight_input_to_hidden, self.bias_input_to_hidden, self.weight_hidden_to_output, self.bias_hidden_to_output)
-            return cell2
+        duplicate_energy_ratio = (duplicate_energy_ratio + 1) * 0.9 / np.sum(duplicate_energy_ratio + 1 + 1e-10)
+        if duplicate_flag > 1 - CELL_DUPLICATE_RATE * 2:
+            if self.timer_duplicate == 0:
+                cell1_energy = self.energy * duplicate_energy_ratio[0]
+                cell2_energy = self.energy * duplicate_energy_ratio[1]
+                random_position = self.position + 0.5 * rng.random(2)
+                random_position = np.mod(random_position, self.game.world_size)
+                self.energy = cell1_energy
+                cell2 = Cell(cell2_energy, self.colors[:], random_position, self.radius, self.valid_rays_count, self.timers_max_cycles, self.game)
+                cell2.set_neural_network(self.weight_input_to_hidden, self.bias_input_to_hidden, self.weight_hidden_to_output, self.bias_hidden_to_output)
+                self.timer_duplicate += 1
+                return cell2
         else:
             return None
 
     def move_with_neural_network_output(self):
         neural_network_outputs_move = self.neural_network_outputs[21:23].reshape(2)
-        self.pre_movement += neural_network_outputs_move * 3
+        self.pre_movement += neural_network_outputs_move * 5
 
 
 
@@ -267,6 +297,13 @@ class Particle:
 
     def true_remove_flag(self):
         self.remove_flag = True
+
+    def add_age(self):
+        self.age += 1
+
+    def age_check(self):
+        if self.age >= self.lifetime:
+            self.remove_flag = True
 
     def move(self):
         """
@@ -310,11 +347,18 @@ class AttractantParticle(Particle):
         super().__init__(position, velocity_vector, lifetime, game)
 
 
-def touch_judgement(particle:Particle, objectA:Object):
+def touch_judgement_between_particle_and_object(particle:Particle, objectA:Object):
     particle_position = particle.get_info("position")
     objectA_position = objectA.get_info("position")
     objectA_radius = objectA.get_info("radius")
     if np.linalg.norm(particle_position - objectA_position) <= objectA_radius:
+        return True
+    else:
+        return False
+
+def touch_judgement_between_objects(objectA:Object, objectB:Object):
+    distance = np.linalg.norm(objectA.get_info("position") - objectB.get_info("position"))
+    if distance <= objectA.get_info("radius") + objectB.get_info("radius"):
         return True
     else:
         return False
@@ -334,7 +378,8 @@ def calc_repulsion_between_cells(main_cell:Cell, sub_cell:Cell): #MainCellが動
 class Game:
     def __init__(self):
         pygame.init()
-        self.screen = pygame.display.set_mode(np.array((600, 600)))
+        self.screen_size = (600, 600)
+        self.screen = pygame.display.set_mode(np.array(self.screen_size))
         pygame.display.set_caption("ArtificialLife")
         self.world_size = np.array((600.0, 600.0), dtype=np.float32)#原点は左下
         self.clock = pygame.time.Clock()
@@ -344,7 +389,7 @@ class Game:
         self.AP_list:list[AttractantParticle] = []
         self.ray_list:list[Ray] = []
         self.energy_pool = np.float32(0.0)
-        self.energy_per_food = np.float32(1.0)
+        self.energy_per_food = FOOD_ENERGY
 
     def append_cells(self,cells:list[Cell]):
         for cell in cells:
@@ -378,7 +423,7 @@ class Game:
         return coordinate
 
     def fill_screen_white(self):
-        self.screen.fill((255,255,255))
+        self.screen.fill((0,0,0))
 
     def get_cell_count(self):
         return len(self.cell_list)
@@ -387,23 +432,23 @@ class Game:
         food_count = int(np.floor(self.energy_pool / self.energy_per_food))
         for _ in range(food_count):
             food_position = rng.random(2) * self.world_size
-            self.food_list.append(Food(self.energy_per_food, rng.random((3,3)), food_position, np.int16(2), self))
+            self.food_list.append(Food(self.energy_per_food, rng.random((3,3)), food_position, FOOD_RADIUS, self))
             self.energy_pool -= self.energy_per_food
 
     def rays_and_APs_touch_judgement(self): ###2
         for ap in self.AP_list:
             for cell in self.cell_list:
-                    if touch_judgement(ap, cell):
+                    if touch_judgement_between_particle_and_object(ap, cell):
                         cell.AP_receptor(ap)
             for food in self.food_list:
-                    if touch_judgement(ap, food):
+                    if touch_judgement_between_particle_and_object(ap, food):
                         food.AP_receptor(ap)
         for ray in self.ray_list:
             for cell in self.cell_list:
-                if touch_judgement(ray, cell):
+                if touch_judgement_between_particle_and_object(ray, cell):
                     ray.set_object_info(cell)
             for food in self.food_list:
-                if touch_judgement(ray, food):
+                if touch_judgement_between_particle_and_object(ray, food):
                     ray.set_object_info(food)
 
     def calc_repulsion(self): ###3 repulsion:斥力
@@ -416,13 +461,13 @@ class Game:
     def energy_absorbing(self): ###4
         for cell in self.cell_list:
             for sub_cell in self.cell_list:
-                cell.absorb_energy(sub_cell)
+                cell.absorb_energy_from_object(sub_cell)
             for food in self.food_list:
-                cell.absorb_energy(food)
+                cell.absorb_energy_from_object(food)
 
     def consume_cell_energy(self): ###5
         for cell in self.cell_list:
-            cell.tickly_consume_energy()
+            cell.cycly_consume_energy()
 
     def update_cell_timers(self): ###6
         for cell in self.cell_list:
@@ -441,7 +486,8 @@ class Game:
     def shoot_APs(self): ###9
         for cell in self.cell_list:
             AP = cell.shoot_AP()
-            self.AP_list.append(AP)
+            if AP is not None:
+                self.AP_list.append(AP)
 
     def cells_duplicate(self): ###10
         cell_list = self.cell_list[:]
@@ -455,28 +501,41 @@ class Game:
         for cell in self.cell_list:
             cell.move_with_neural_network_output()
 
-    def remove_flag_check(self): ###12
+    def add_age_to_particle_and_cell(self): ###12
+        for cell in self.cell_list:
+            cell.add_age()
+        for ray in self.ray_list:
+            ray.add_age()
+        for AP in self.AP_list:
+            AP.add_age()
+
+    def remove_flag_check(self): ###13
         for cell in self.cell_list:
             cell.no_energy_check()
+            cell.check_age()
         for food in self.food_list:
             food.no_energy_check()
+        for ray in self.ray_list:
+            ray.age_check()
+        for AP in self.AP_list:
+            AP.age_check()
 
-    def premove_to_move(self): ###13
+    def premove_to_move(self): ###14
         for cell in self.cell_list:
             cell.premove_to_move()
-        for food in self.cell_list:
+        for food in self.food_list:
             food.premove_to_move()
 
-    def move_particles(self): ###14
+    def move_particles(self): ###15
         for ap in self.AP_list:
             ap.move()
         for ray in self.ray_list:
             ray.move()
 
-    def collect_statistics_data(self): ###15
+    def collect_statistics_data(self): ###16
         pass
 
-    def remove_remove_flagged(self): ###16
+    def remove_remove_flagged(self): ###17
         cell_list = self.cell_list[:]
         for cell in cell_list:
             if cell.get_remove_flag():
@@ -496,13 +555,14 @@ class Game:
             if AP.get_remove_flag():
                 self.AP_list.remove(AP)
 
-    def add_energy_to_energy_pool(self): ###17
-        self.energy_pool += 3.0
+    def add_energy_to_energy_pool(self): ###18
+        if len(self.food_list) < 500:
+            self.energy_pool += 1
 
-    def draw(self):
+    def draw_cells(self):
         for cell in self.cell_list:
-            print(cell.get_info("position"))
-            screen_position = self.world_coordinate_to_screen_coordinate(cell.get_info("position"))
+            screen_position = self.world_coordinate_to_screen_coordinate(cell.get_info("position") * self.screen_size[0] / self.world_size)
+            print(cell.get_info("energy"))
             color1, color2, color3 = np.array(cell.get_info("colors")*255, dtype=np.int16)
             radius1 = cell.get_info("radius")
             radius2 = radius1 - 1
@@ -510,6 +570,32 @@ class Game:
             pygame.draw.circle(self.screen, color1, screen_position, radius1)
             pygame.draw.circle(self.screen, color2, screen_position, radius2)
             pygame.draw.circle(self.screen, color3, screen_position, radius3)
+
+    def draw_foods(self):
+        for food in self.food_list:
+            screen_position = self.world_coordinate_to_screen_coordinate(food.get_info("position") * self.screen_size[0] / self.world_size)
+            color1, color2, color3 = np.array(food.get_info("colors") * 255, dtype=np.int16)
+            radius1 = food.get_info("radius")
+            radius2 = radius1 - 1
+            radius3 = radius2 - 1
+            pygame.draw.circle(self.screen, color1, screen_position, radius1)
+            pygame.draw.circle(self.screen, color2, screen_position, radius2)
+            pygame.draw.circle(self.screen, color3, screen_position, radius3)
+
+    def draw_rays(self):
+        for ray in self.ray_list:
+            screen_position = self.world_coordinate_to_screen_coordinate(ray.get_info("position") * self.screen_size[0] / self.world_size)
+            color = (255,255,255)
+            radius = 2
+            pygame.draw.circle(self.screen, color, screen_position, radius)
+
+    def draw_APs(self):
+        for AP in self.AP_list:
+            screen_position = self.world_coordinate_to_screen_coordinate(AP.get_info("position") * self.screen_size[0] / self.world_size)
+            color = (255,255,255)
+            radius = 2
+            pygame.draw.circle(self.screen, color, screen_position, radius)
+
 
 
 
@@ -527,10 +613,12 @@ class Game:
         self.shoot_APs()
         self.cells_duplicate()
         self.cells_move()
+        self.add_age_to_particle_and_cell()
         self.premove_to_move()
         self.move_particles()
         self.remove_flag_check()
         self.remove_remove_flagged()
+        self.add_energy_to_energy_pool()
 
 
 
@@ -539,22 +627,28 @@ class Game:
 
 def main():
     game = Game()
-    cell1 = Cell(np.float32(10.0), rng.random((3,3)), np.array((0.0,0.0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]), game)
-    #cell2 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1,0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]), game)
+    cell1 = Cell(np.float32(1000.0), rng.random((3,3)), np.array((0.0,0.0)), CELL_RADIUS, 1, np.array([10, 2, 3, 4, 5]), game)
+    cell2 = Cell(np.float32(1000.0), rng.random((3, 3)), np.array((0.0, 0.0)), CELL_RADIUS, 1,np.array([10, 2, 3, 4, 5]), game)
+    cell3 = Cell(np.float32(1000.0), rng.random((3, 3)), np.array((0.0, 0.0)), CELL_RADIUS, 1,np.array([10, 2, 3, 4, 5]), game)
+    cell4 = Cell(np.float32(1000.0), rng.random((3,3)), np.array((0.0,0.0)), CELL_RADIUS, 1, np.array([10, 50, 100, 500, 1000]), game)
+    cell5 = Cell(np.float32(1000.0), rng.random((3, 3)), np.array((0.0, 0.0)), CELL_RADIUS, 1,np.array([10, 50, 100, 500, 1000]), game)
+    cell6 = Cell(np.float32(1000.0), rng.random((3, 3)), np.array((0.0, 0.0)), CELL_RADIUS, 1,np.array([10, 50, 100, 500, 1000]), game)
 
-    food1 = Food(np.float32(1.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1.0,1.0)), np.int16(3), game)
-
-    game.append_cells([cell1])
+    game.append_cells([cell1,cell2,cell3,cell4,cell5,cell6])
     game.debug_randomize_cell_neural_network()
+    game.set_energy_pool(100)
 
-    game.append_foods([food1])
-    game.set_energy_pool(10)
-
+    cycle_count = 0
+    clock = pygame.time.Clock()
     running = True
     while running:
         game.fill_screen_white()
         game.cycle()
-        game.draw()
+        cycle_count += 1
+        game.draw_cells()
+        game.draw_foods()
+        game.draw_rays()
+        game.draw_APs()
         pygame.display.flip()
 
         for event in pygame.event.get():
@@ -562,10 +656,14 @@ def main():
                 running = False
                 pygame.quit()
                 sys.exit()
-            if game.get_cell_count() == 0:
-                running = False
-                pygame.quit()
-                sys.exit()
+        if game.get_cell_count() == 0:
+            print(f"cycle_count::{cycle_count}")
+            running = False
+            pygame.quit()
+            sys.exit()
+
+        clock.tick(60)
+
 
 
 if __name__ == "__main__":
