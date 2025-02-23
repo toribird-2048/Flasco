@@ -1,7 +1,6 @@
 import numpy as np
 import pygame
 from typing import Self
-import copy
 
 
 #誘因粒子：AttractantParticle:AP
@@ -10,12 +9,13 @@ rng = np.random.default_rng()
 
 
 class Object:
-    def __init__(self, energy:np.float32, colors:np.array(np.float32), position:np.array(np.float32), radius:np.int16):
+    def __init__(self, energy:np.float32, colors:np.array(np.float32), position:np.array(np.float32), radius:np.int16, game:"Game"):
         self.energy = np.float32(energy)
         self.colors = np.array(colors) #(R, G, B)それぞれ0~1
         self.position = np.array(position)
         self.radius = np.int16(radius)
         self.pre_movement = np.array([0.0, 0.0])
+        self.game = game
         self.remove_flag = False
 
     def __str__(self):
@@ -52,7 +52,9 @@ class Object:
         :param vector:
         :return:
         """
+        world_size = self.game.get_world_size
         self.position += vector
+        self.position = np.array((self.position[0] % world_size[0], self.position[1] % world_size[1]))
 
     def premove_to_move(self):
         self.move(self.pre_movement)
@@ -101,15 +103,15 @@ class Object:
 
 
 class Food(Object):
-    def __init__(self, energy:np.float32, colors:np.array(np.float32), position:np.array(np.float32), radius:np.int16):
-        super().__init__(energy, colors, position, radius)
+    def __init__(self, energy:np.float32, colors:np.array(np.float32), position:np.array(np.float32), radius:np.int16, game):
+        super().__init__(energy, colors, position, radius, game)
 
     def __str__(self):
         return "Food"
 
 class Cell(Object):
     def __init__(self, energy:np.float32, colors:np.array(np.float32), position:np.array(np.float32), radius:np.int16, valid_rays_count, timers_max_cycles:np.array(np.int16), game:"Game"):
-        super().__init__(energy, colors, position, radius)
+        super().__init__(energy, colors, position, radius, game)
         self.rays = [None for _ in range(8)]
         self.valid_rays_count = valid_rays_count
         self.timers_max_cycles = np.array(timers_max_cycles)
@@ -122,7 +124,6 @@ class Cell(Object):
         self.bias_hidden_to_output = np.zeros((21,1),dtype=np.float32)
         self.neural_network_outputs = np.zeros((21, 1),dtype=np.float32)
         self.delta_position = np.array([0.0, 0.0])
-        self.game = game
 
     def __str__(self):
         return "Cell"
@@ -183,7 +184,6 @@ class Cell(Object):
         timers_info = self.timers_cycle
         info_for_NN = np.concatenate((rays_info, np.array([self_energy, *self_delta_position]), timers_info), axis=0)
         info_for_NN = info_for_NN.reshape((info_for_NN.size, 1))
-        assert info_for_NN.size == 96
         return info_for_NN[:]
 
     def calc_neural_network(self, NN_input):
@@ -199,14 +199,14 @@ class Cell(Object):
         for k, ray in enumerate(self.rays):
             if ray is None:
                 if ray_shoot_flags[k] > 0:
-                    self.rays[k] = Ray(self.position, np.array([np.cos(ray_shoot_theta[k]), np.sin(ray_shoot_theta[k])]), np.int16(20))
+                    self.rays[k] = Ray(self.position, np.array([np.cos(ray_shoot_theta[k]), np.sin(ray_shoot_theta[k])]), np.int16(20), self.game)
         return self.rays
 
     def shoot_AP(self):
         neural_network_outputs_AP = self.neural_network_outputs[16:18]
         AP_shoot_flag = neural_network_outputs_AP[0]
         AP_shoot_theta = neural_network_outputs_AP[1] * np.pi
-        return AttractantParticle(self.position, np.array((np.cos(AP_shoot_theta), np.sin(AP_shoot_theta))), np.int16(20))
+        return AttractantParticle(self.position, np.array((np.cos(AP_shoot_theta), np.sin(AP_shoot_theta))), np.int16(20), self.game)
 
     def duplicate(self):
         neural_network_outputs_duplicate = self.neural_network_outputs[18:21]
@@ -218,7 +218,7 @@ class Cell(Object):
             cell2_energy = self.energy * duplicate_energy_ratio[1]
             random_position = self.position + 0.5 * rng.random((2,1))
             random_position = np.mod(random_position, self.game.world_size)
-            cell2 = Cell(cell2_energy, self.colors, self.position, self.radius, self.valid_rays_count, self.timers_max_cycles,self.game)
+            cell2 = Cell(cell2_energy, self.colors, self.position, self.radius, self.valid_rays_count, self.timers_max_cycles, self.game)
             cell2.set_neural_network(self.weight_input_to_hidden, self.bias_input_to_hidden, self.weight_hidden_to_output, self.bias_hidden_to_output)
             return cell2
         else:
@@ -227,11 +227,12 @@ class Cell(Object):
 
 
 class Particle:
-    def __init__(self, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16):
+    def __init__(self, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16, game:"Game"):
         self.position = position
         self.velocity_vector = velocity_vector
         self.lifetime = lifetime
         self.age = 0
+        self.game = game
         self.remove_flag = False
 
     energy_consumption = np.float32(1.0)
@@ -265,7 +266,9 @@ class Particle:
         決まった方向(velocity_vector)に動く
         :return:
         """
+        world_size = self.game.get_world_size()
         self.position += self.velocity_vector
+        self.position = np.array((self.position[0] % world_size[0], self.position[1] % world_size[1]))
 
     def lifetime_check(self):
         """
@@ -276,8 +279,8 @@ class Particle:
             self.remove_flag = True
 
 class Ray(Particle):
-    def __init__(self, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16):
-        super().__init__(position, velocity_vector, lifetime)
+    def __init__(self, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16, game:"Game"):
+        super().__init__(position, velocity_vector, lifetime, game)
         self.object_info_and_theta = np.zeros(11, dtype=np.float32)
         self.object_types = {"Cell":np.float32(-1.0), "Food":np.float32(0.0), "Unmovable":np.float32(1.0)}
 
@@ -296,8 +299,8 @@ class Ray(Particle):
         self.true_remove_flag()
 
 class AttractantParticle(Particle):
-    def __init__(self, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16):
-        super().__init__(position, velocity_vector, lifetime)
+    def __init__(self, position:np.array(np.float32), velocity_vector:np.array(np.float32), lifetime:np.int16, game:"Game"):
+        super().__init__(position, velocity_vector, lifetime, game)
 
 
 def touch_judgement(particle:Particle, objectA:Object):
@@ -324,7 +327,7 @@ def calc_repulsion_between_cells(main_cell:Cell, sub_cell:Cell): #MainCellが動
 class Game:
     def __init__(self):
         self.screen = pygame.display.set_mode(np.array((600, 600)))
-        self.world_size = np.array((600, 600))#原点は左下
+        self.world_size = np.array((600.0, 600.0), dtype=np.float32)#原点は左下
         self.clock = pygame.time.Clock()
         self.running = True
         self.food_list:list[Food] = []
@@ -357,11 +360,14 @@ class Game:
         for cell in self.cell_list:
             cell.set_neural_network_random()
 
+    def get_world_size(self):
+        return self.world_size
+
     def generate_food(self): ###1
         food_count = int(np.floor(self.energy_pool / self.energy_per_food))
         for _ in range(food_count):
             food_position = rng.random(2) * self.world_size
-            self.food_list.append(Food(self.energy_per_food, np.array([0.0, 1.0, 0.0]), food_position, np.int16(2)))
+            self.food_list.append(Food(self.energy_per_food, np.array([0.0, 1.0, 0.0]), food_position, np.int16(2), game))
             self.energy_pool -= self.energy_per_food
 
     def rays_and_APs_touch_judgement(self): ###2
@@ -476,13 +482,10 @@ for k in range(20000):
     game = Game()
     cell1 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((0.0,0.0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]), game)
     #cell2 = Cell(np.float32(10.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1,0)), np.int16(5), 1, np.array([10, 2, 3, 4, 5]), game)
-    food1 = Food(np.float32(1.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1.0,1.0)), np.int16(3))
-
-    ap1 = AttractantParticle(np.array((0.5,0.5)), np.array((0.1,0.1)), np.int16(10))
+    food1 = Food(np.float32(1.0), np.array([[1,1,1],[1,1,1],[1,1,1]]), np.array((1.0,1.0)), np.int16(3), game)
 
     game.append_cells([cell1])
     game.append_foods([food1])
-    game.debug_append_APs([ap1])
     game.set_energy_pool(10)
 
     game.generate_food()
