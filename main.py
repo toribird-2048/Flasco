@@ -147,6 +147,17 @@ class Cell(Object):
         self.delta_position = self.pre_movement
         self.pre_movement = np.zeros(2,dtype=np.float32)
 
+    def remove_ray(self):
+        rays = self.rays
+        removed_rays = []
+        for ray in rays:
+            if ray is not None:
+                if ray.get_remove_flag():
+                    removed_rays.append(ray)
+        self.rays = [ray if ray not in removed_rays else None for ray in self.rays]
+        return removed_rays
+
+
     def absorb_energy(self, objectA):
         self.transfer_energy(objectA, -self.energy_absorption_rate)
 
@@ -432,6 +443,30 @@ class Game:
         for ray in self.ray_list:
             ray.move()
 
+    def collect_statistics_data(self): ###14
+        pass
+
+    def remove_remove_flagged(self): ###15
+        cell_list = self.cell_list[:]
+        for cell in cell_list:
+            if cell.get_remove_flag():
+                self.cell_list.remove(cell)
+            for removed_ray in cell.remove_ray():
+                self.ray_list.remove(removed_ray)
+        food_list = self.food_list[:]
+        for food in food_list:
+            if food.get_remove_flag():
+                self.food_list.remove(food)
+        ray_list = self.ray_list[:]
+        for ray in ray_list:
+            if ray.get_remove_flag():
+                self.ray_list.remove(ray)
+        AP_list = self.AP_list
+        for AP in AP_list:
+            if AP.get_remove_flag():
+                self.AP_list.remove(AP)
+
+
 
 
 for k in range(20000):
@@ -459,5 +494,6 @@ for k in range(20000):
     game.shoot_APs()
     game.cells_duplicate()
     game.remove_flag_check()
+    game.remove_remove_flagged()
     print(k)
 #print(game.ray_list)
