@@ -218,7 +218,7 @@ class Cell(Object):
         if duplicate_flag > 0:
             cell1_energy = self.energy * duplicate_energy_ratio[0]
             cell2_energy = self.energy * duplicate_energy_ratio[1]
-            random_position = self.position + 0.5 * rng.random((2,1))
+            random_position = self.position + 0.5 * rng.random(2)
             random_position = np.mod(random_position, self.game.world_size)
             self.energy = cell1_energy
             cell2 = Cell(cell2_energy, self.colors[:], random_position, self.radius, self.valid_rays_count, self.timers_max_cycles, self.game)
